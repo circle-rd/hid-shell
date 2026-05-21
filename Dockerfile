@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 #
-# HID-Shell cross-compilation toolchain + release image.
+# HID-Shell cross-compilation toolchain.
 #
 # Bundles everything needed to produce the three release binaries used
 # by the Vandal universal launcher (extensions/shell_launcher.txt):
@@ -23,22 +23,20 @@
 #   - Windows: setupapi.dll, hid.dll (system DLLs, always present)
 #   - macOS:   libhidapi.dylib via Homebrew + IOKit/CoreFoundation (system)
 #
-# Build targets:
+# Usage:
 #
-#   --target toolchain         (dev image used by ./scripts/docker-build.sh,
-#                              source is bind-mounted, no COPY)
+#   docker build --target toolchain -t hid-shell-toolchain .
+#   docker run --rm -v "$PWD":/workspace -w /workspace \
+#       hid-shell-toolchain ./scripts/build_all.sh
 #
-#   (default = release)        FROM scratch image containing only the three
-#                              cross-compiled binaries renamed to the short
-#                              names expected by vandal-react server
-#                              (sl / sm / sw.exe). Published to GHCR by
-#                              .github/workflows/publish-binaries.yml and
-#                              consumed by the vandal-react Dockerfile via
-#                              `COPY --from=ghcr.io/<owner>/hid-shell-binaries`.
+# `./scripts/docker-build.sh` wraps that for local development. The
+# binaries themselves are published as assets on the GitHub Release
+# page by .github/workflows/publish-binaries.yml — that workflow only
+# uses the `toolchain` stage below.
 #
 
 # =============================================================================
-# Stage 1 — Toolchain (Nim + Zig + mingw + hidapi static archives)
+# Toolchain (Nim + Zig + mingw + hidapi static archives)
 # =============================================================================
 FROM ubuntu:26.04 AS toolchain
 
@@ -106,32 +104,3 @@ RUN set -eux; \
 WORKDIR /workspace
 
 CMD ["bash"]
-
-# =============================================================================
-# Stage 2 — Release builder (source baked in, runs build_all.sh)
-# =============================================================================
-FROM toolchain AS release-builder
-
-# Source needed by Nim. .dockerignore restricts the COPY to what build_all.sh
-# actually reads (src/, scripts/, hid-shell.nimble).
-COPY . /workspace
-WORKDIR /workspace
-
-RUN ./scripts/build_all.sh \
-    && ls -lh /workspace/dist/
-
-# =============================================================================
-# Stage 3 — Release image (just the binaries, FROM scratch)
-# =============================================================================
-# This stage is what gets published to ghcr.io/<owner>/hid-shell-binaries.
-# Binaries are renamed to the short names expected by vandal-react's
-# /api/shell/.../prepare endpoint and by extensions/shell_launcher.txt.
-FROM scratch AS release
-
-COPY --from=release-builder /workspace/dist/hid_shell-linux-x86_64        /sl
-COPY --from=release-builder /workspace/dist/hid_shell-macos-arm64         /sm
-COPY --from=release-builder /workspace/dist/hid_shell-windows-x86_64.exe  /sw.exe
-
-LABEL org.opencontainers.image.title="HID-Shell binaries" \
-      org.opencontainers.image.description="Pre-built HID-Shell payloads for Linux, macOS arm64 and Windows x86_64." \
-      org.opencontainers.image.source="https://github.com/x42en/HID-Shell"

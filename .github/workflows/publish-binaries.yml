@@ -1,23 +1,23 @@
 name: Publish HID-Shell binaries
 
 # Builds the three cross-compiled HID-Shell payloads (Linux x86_64,
-# macOS arm64, Windows x86_64) and publishes them as a tiny `FROM scratch`
-# OCI image containing just the binaries renamed to the short names the
-# vandal-react universal launcher expects (sl, sm, sw.exe).
+# macOS arm64, Windows x86_64) and uploads them as assets on the
+# triggering GitHub Release, alongside a SHA256SUMS manifest and a
+# usage README written by the workflow itself.
 #
-# Triggered ONLY on GitHub Release publication (or manual dispatch) so
-# each release produces a single, immutable, semver-tagged image.
+# Triggered ONLY on GitHub Release publication (or manual dispatch — in
+# which case assets are uploaded to a `manual-<run_id>` pre-release for
+# inspection).
 #
-# Pipeline (mirrors vandal-react/.github/workflows/docker-publish.yml):
+# Pipeline:
 #
-#   meta ──┬──> build (linux-x86_64)   ──┐
-#          ├──> build (macos-arm64)    ──┤──> publish (scratch image)
-#          └──> build (windows-x86_64) ──┘
+#   build (linux-x86_64)   ──┐
+#   build (macos-arm64)    ──┤──> release (asset upload + notes)
+#   build (windows-x86_64) ──┘
 #
-# The vandal-react Dockerfile consumes the resulting image via:
-#
-#     FROM ghcr.io/${{ github.repository_owner }}/hid-shell-binaries:latest AS hid-shell-bins
-#     COPY --from=hid-shell-bins / /app/server/assets/hid-shell/
+# Operators consuming the binaries simply download the three assets
+# from the release page and upload them to their Vandal agent at
+# /payloads/sl, /payloads/sm and /payloads/sw.exe via the BadUSB UI.
 
 on:
   release:
@@ -25,46 +25,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to publish (defaults to 'manual')"
+        description: "Existing release tag to upload assets to (leave empty to create a manual pre-release)"
         required: false
-        default: "manual"
+        default: ""
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/hid-shell-binaries
-  # Pinned across all jobs so toolchain cache + final image stay aligned.
+  # Pinned across all jobs so the toolchain cache stays aligned with
+  # the binaries that consume it.
   TOOLCHAIN_IMAGE: hid-shell-toolchain:ci
 
 jobs:
-  # ─── Compute the tag set once and share it with the per-target builds ──
-  meta:
-    name: Resolve image tags
-    runs-on: ubuntu-latest
-    outputs:
-      tags: ${{ steps.meta.outputs.tags }}
-      labels: ${{ steps.meta.outputs.labels }}
-      json: ${{ steps.meta.outputs.json }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest,enable=${{ github.event_name == 'release' }}
-            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-            type=sha,prefix=sha-
-
   # ─── One job per cross-compile target, executed in parallel ───────────
   build:
     name: Build (${{ matrix.target.slug }})
-    needs: meta
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -75,15 +48,12 @@ jobs:
           - slug: linux-x86_64
             script: linux
             artefact: hid_shell-linux-x86_64
-            short: sl
           - slug: macos-arm64
             script: macos
             artefact: hid_shell-macos-arm64
-            short: sm
           - slug: windows-x86_64
             script: windows
             artefact: hid_shell-windows-x86_64.exe
-            short: sw.exe
 
     steps:
       - name: Checkout repository
@@ -115,28 +85,21 @@ jobs:
             ./scripts/build_all.sh ${{ matrix.target.script }}
           ls -lh dist/
 
-      - name: Stage binary under its short name
-        run: |
-          mkdir -p /tmp/out
-          cp "dist/${{ matrix.target.artefact }}" "/tmp/out/${{ matrix.target.short }}"
-          ls -lh /tmp/out/
-
       - name: Upload binary artefact
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target.slug }}
-          path: /tmp/out/${{ matrix.target.short }}
+          path: dist/${{ matrix.target.artefact }}
           if-no-files-found: error
           retention-days: 1
 
-  # ─── Assemble the three binaries into the final scratch image ────────
-  publish:
-    name: Publish binaries image
-    needs: [meta, build]
+  # ─── Collect artefacts, write release notes, attach to the Release ───
+  release:
+    name: Attach binaries to release
+    needs: [build]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      packages: write
+      contents: write
     steps:
       - name: Download all binary artefacts
         uses: actions/download-artifact@v4
@@ -148,49 +111,128 @@ jobs:
       - name: Inspect staged binaries
         run: ls -lh /tmp/staged/
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Tiny ad-hoc Dockerfile: FROM scratch + the three pre-built binaries.
-      # No build context coupling to the source repo — pure artefact stitching.
-      - name: Write release Dockerfile
+      - name: Compute SHA256 checksums
+        working-directory: /tmp/staged
         run: |
-          cat > /tmp/staged/Dockerfile <<'EOF'
-          # syntax=docker/dockerfile:1.6
-          FROM scratch
-          COPY sl     /sl
-          COPY sm     /sm
-          COPY sw.exe /sw.exe
-          LABEL org.opencontainers.image.title="HID-Shell binaries"
-          LABEL org.opencontainers.image.description="Pre-built HID-Shell payloads for Linux, macOS arm64 and Windows x86_64."
-          LABEL org.opencontainers.image.source="https://github.com/${{ github.repository }}"
+          sha256sum \
+            hid_shell-linux-x86_64 \
+            hid_shell-macos-arm64 \
+            hid_shell-windows-x86_64.exe \
+            | tee SHA256SUMS
+
+      # Resolve the release tag and a few human-friendly fields that we
+      # inject into the notes. For workflow_dispatch with no tag we
+      # create a pre-release named after the run; for release events we
+      # reuse the existing tag.
+      - name: Resolve release context
+        id: ctx
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            PRERELEASE="${{ github.event.release.prerelease }}"
+          else
+            TAG="${{ inputs.tag }}"
+            if [ -z "$TAG" ]; then
+              TAG="manual-${{ github.run_id }}"
+              PRERELEASE="true"
+            else
+              PRERELEASE="false"
+            fi
+          fi
+          {
+            echo "tag=$TAG"
+            echo "prerelease=$PRERELEASE"
+            echo "linux_sha=$(awk '/linux-x86_64/   {print $1}' /tmp/staged/SHA256SUMS)"
+            echo "macos_sha=$(awk '/macos-arm64/    {print $1}' /tmp/staged/SHA256SUMS)"
+            echo "win_sha=$(  awk '/windows-x86_64/ {print $1}' /tmp/staged/SHA256SUMS)"
+            echo "linux_size=$(du -h /tmp/staged/hid_shell-linux-x86_64        | cut -f1)"
+            echo "macos_size=$(du -h /tmp/staged/hid_shell-macos-arm64         | cut -f1)"
+            echo "win_size=$(  du -h /tmp/staged/hid_shell-windows-x86_64.exe  | cut -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        run: |
+          cat > /tmp/staged/RELEASE_NOTES.md <<EOF
+          # HID-Shell ${{ steps.ctx.outputs.tag }}
+
+          Pre-built cross-platform HID-Shell payloads for the
+          [Vandal](https://github.com/${{ github.repository_owner }}/Vandal)
+          ESP32 agent. Drop these binaries onto an agent's MSC volume
+          (\`/payloads/\`) and the universal BadUSB launcher will spawn
+          the right one on whatever host the device is plugged into.
+
+          ## Assets
+
+          | File | Target | Size | SHA256 | Agent path |
+          |------|--------|------|--------|------------|
+          | \`hid_shell-linux-x86_64\`       | Linux x86_64 (glibc, libudev)                  | ${{ steps.ctx.outputs.linux_size }} | \`${{ steps.ctx.outputs.linux_sha }}\` | \`/payloads/sl\`     |
+          | \`hid_shell-macos-arm64\`        | macOS arm64 (requires \`brew install hidapi\`) | ${{ steps.ctx.outputs.macos_size }} | \`${{ steps.ctx.outputs.macos_sha }}\` | \`/payloads/sm\`     |
+          | \`hid_shell-windows-x86_64.exe\` | Windows x86_64 (static, no DLL deps)           | ${{ steps.ctx.outputs.win_size }}   | \`${{ steps.ctx.outputs.win_sha }}\`   | \`/payloads/sw.exe\` |
+          | \`SHA256SUMS\`                   | Checksum manifest                              | —                                   | —                                      | —                    |
+
+          ## Deploy to a Vandal agent
+
+          1. Download the three binaries from this release.
+          2. Verify checksums:
+             \`\`\`sh
+             sha256sum -c SHA256SUMS
+             \`\`\`
+          3. Rename them to the short names the universal launcher
+             expects on the agent's MSC volume:
+             \`\`\`
+             hid_shell-linux-x86_64        → sl
+             hid_shell-macos-arm64         → sm
+             hid_shell-windows-x86_64.exe  → sw.exe
+             \`\`\`
+          4. Upload each file to \`/payloads/\` via the Vandal web UI
+             (**BadUSB → File transfer**). One upload per file, one time
+             per agent — the binaries persist on the FAT volume across
+             reboots.
+          5. From the agent's *Shell* page, click **Prepare** → **Start**.
+             The BFF streams the universal DuckyScript launcher inline
+             (~2 KB, single MQTT message), the agent injects it as HID
+             keystrokes, the matching host OS executes the right payload,
+             and the bidirectional shell channel comes up.
+
+          ## Runtime requirements on the target host
+
+          - **Linux**: \`libudev\` (part of systemd — universal on
+            modern desktops). hidapi is statically linked.
+          - **Windows**: nothing — hidapi, \`setupapi.dll\` and
+            \`hid.dll\` are statically linked or system-provided. Built
+            with \`--app:gui\` so no console window appears.
+          - **macOS**: \`brew install hidapi\` is required because
+            hidapi's macOS backend uses Apple's IOKit SDK headers which
+            cannot be redistributed in a pre-built static archive. See
+            the project README for the opt-in process to produce a fully
+            autonomous macOS binary on a real Mac.
+
+          ## Build provenance
+
+          - Repository: \`${{ github.repository }}\`
+          - Commit:     \`${{ github.sha }}\`
+          - Workflow:   \`.github/workflows/publish-binaries.yml\`
+          - Toolchain:  Ubuntu 26.04 + Nim 2.2.4 + Zig 0.14.1 +
+                        mingw-w64 + statically prebuilt hidapi 0.14.0
           EOF
-          cat /tmp/staged/Dockerfile
+          cat /tmp/staged/RELEASE_NOTES.md
 
-      - name: Build and push binaries image
-        uses: docker/build-push-action@v5
+      - name: Upload assets to release
+        uses: softprops/action-gh-release@v2
         with:
-          context: /tmp/staged
-          file: /tmp/staged/Dockerfile
-          # Multi-platform manifest list. The image only contains pre-cross-
-          # compiled static binaries (sl/sm/sw.exe) that are independent of
-          # the container's host architecture, so the same blobs are valid
-          # under both amd64 and arm64 manifests. This lets multi-arch
-          # consumers (e.g. vandal-react nightly builds on arm64 runners)
-          # resolve the image without `no match for platform` errors.
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ needs.meta.outputs.tags }}
-          labels: ${{ needs.meta.outputs.labels }}
-
-      - name: Inspect resulting image
-        run: |
-          tag="$(jq -cr '.tags[0]' <<< '${{ needs.meta.outputs.json }}')"
-          docker buildx imagetools inspect "${tag}"
+          tag_name: ${{ steps.ctx.outputs.tag }}
+          prerelease: ${{ steps.ctx.outputs.prerelease }}
+          body_path: /tmp/staged/RELEASE_NOTES.md
+          # Keep any human-written description on an existing release;
+          # the asset table + checksums are appended underneath. For
+          # first-time uploads (workflow_dispatch creating a pre-release)
+          # the body is used as-is.
+          append_body: true
+          fail_on_unmatched_files: true
+          files: |
+            /tmp/staged/hid_shell-linux-x86_64
+            /tmp/staged/hid_shell-macos-arm64
+            /tmp/staged/hid_shell-windows-x86_64.exe
+            /tmp/staged/SHA256SUMS
+            /tmp/staged/RELEASE_NOTES.md

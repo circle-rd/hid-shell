@@ -16,6 +16,32 @@ single binary:
 
 The wire protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
+## Download pre-built binaries
+
+Each tagged [GitHub Release](../../releases) ships the three
+cross-compiled payloads as assets, plus a `SHA256SUMS` manifest and a
+generated `RELEASE_NOTES.md` describing the deployment procedure:
+
+| Asset                              | Target              | Rename to (agent `/payloads/`) |
+| ---------------------------------- | ------------------- | ------------------------------ |
+| `hid_shell-linux-x86_64`           | Linux x86_64        | `sl`                           |
+| `hid_shell-macos-arm64`            | macOS arm64         | `sm`                           |
+| `hid_shell-windows-x86_64.exe`     | Windows x86_64      | `sw.exe`                       |
+
+Verify and rename in one go:
+
+```sh
+sha256sum -c SHA256SUMS
+mv hid_shell-linux-x86_64       sl
+mv hid_shell-macos-arm64        sm
+mv hid_shell-windows-x86_64.exe sw.exe
+```
+
+Then upload the three files to `/payloads/` on the Vandal agent via
+the web UI (**BadUSB → File transfer**). One-time per agent — the
+binaries persist on the FAT volume across reboots and the agent's
+*Shell* page handles the rest (Prepare → Start).
+
 ## Build
 
 ### Recommended: Docker cross-toolchain
@@ -123,9 +149,12 @@ available to the linker.
 ./hid_shell --debug        # log to stderr for development
 ```
 
-The launcher DuckyScripts in `vandal-react/server/scripts/badusb/<os>/`
-download the right binary from the agent's MSC volume and exec it
-silently (no terminal window on any OS).
+In the standard deployment the binary is **not** invoked by hand: the
+Vandal universal launcher
+(`vandal-react/server/scripts/badusb/library/extensions/shell_launcher.txt`)
+is injected as HID keystrokes by the agent, which then exec's the
+matching `/payloads/sl|sm|sw.exe` silently (no terminal window on any
+OS).
 
 ## Headless contract
 
