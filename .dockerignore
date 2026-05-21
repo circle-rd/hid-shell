@@ -1,0 +1,13 @@
+# Build context shipped to `docker build`.
+#
+# - The `toolchain` target ignores everything: source is bind-mounted at
+#   runtime by ./scripts/docker-build.sh.
+# - The `release` target (default, used by CI) needs the source baked in
+#   so build_all.sh can run inside the image. Allow src/, scripts/ and
+#   the Nimble manifest.
+.git
+.github
+dist
+managed_components
+*.md
+.dockerignore
