@@ -179,7 +179,13 @@ jobs:
         with:
           context: /tmp/staged
           file: /tmp/staged/Dockerfile
-          platforms: linux/amd64
+          # Multi-platform manifest list. The image only contains pre-cross-
+          # compiled static binaries (sl/sm/sw.exe) that are independent of
+          # the container's host architecture, so the same blobs are valid
+          # under both amd64 and arm64 manifests. This lets multi-arch
+          # consumers (e.g. vandal-react nightly builds on arm64 runners)
+          # resolve the image without `no match for platform` errors.
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ needs.meta.outputs.tags }}
           labels: ${{ needs.meta.outputs.labels }}
