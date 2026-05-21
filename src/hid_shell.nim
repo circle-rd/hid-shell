@@ -59,7 +59,11 @@ proc main() =
 
   while true:
     let child = spawnShell()
-    if logger != nil: logger("spawned shell pid=" & $child.process.processID())
+    if logger != nil:
+      when defined(windows):
+        logger("spawned shell pid=" & $child.process.processID())
+      else:
+        logger("spawned shell pid=" & $child.pid)
 
     try:
       runPump(link, child, logger)
