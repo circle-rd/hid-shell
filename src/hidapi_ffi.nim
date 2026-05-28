@@ -69,3 +69,7 @@ proc hid_write*(dev: HidDevice, data: ptr uint8, length: csize_t): cint {.hidPro
 
 proc hid_read_timeout*(dev: HidDevice, data: ptr uint8,
                        length: csize_t, milliseconds: cint): cint {.hidProc.}
+
+proc hid_error*(dev: HidDevice): WideCString {.hidProc.}
+  ## Last error for the given device handle (NULL-safe — pass nil for
+  ## global errors). Returns a wide string owned by hidapi; do not free.

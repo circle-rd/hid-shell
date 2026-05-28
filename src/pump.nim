@@ -3,7 +3,7 @@
 ## loop: alternates short reads from each side and never blocks
 ## indefinitely.
 
-import std/[options, os, times]
+import std/[options, times]
 import ./protocol, ./transport_hid, ./shell_child
 
 type
@@ -31,15 +31,6 @@ proc sendCtrl*(link: HidLink, stats: var PumpStats,
     copyMem(addr f.payload[1], unsafeAddr extra[0], n)
   f.payloadLen = 1 + n
   return link.sendFrame(f)
-
-proc sendHello*(link: HidLink, stats: var PumpStats): bool =
-  var extra: array[3, uint8]
-  extra[0] = uint8(ProtoVersion and 0xFF)
-  extra[1] = uint8((ProtoVersion shr 8) and 0xFF)
-  when defined(windows):   extra[2] = OsWindows
-  elif defined(macosx):    extra[2] = OsMacOS
-  else:                    extra[2] = OsLinux
-  return sendCtrl(link, stats, CtrlHello, extra)
 
 proc sendOut(link: HidLink, stats: var PumpStats,
              data: openArray[uint8]): bool =
@@ -69,21 +60,12 @@ proc runPump*(link: HidLink, child: ShellChild,
   # Reassembly state for incoming CMD frames (agent -> host).
   var cmdAcc = newSeq[uint8]()
 
-  # 1. HELLO handshake.
-  discard sendHello(link, stats)
-  let helloDeadline = epochTime() + 3.0
-  var helloAcked = false
-  while epochTime() < helloDeadline:
-    let f = link.readFrame(200)
-    if f.isNone:
-      continue
-    let fr = f.get
-    if fr.typ == TypeCtrl and fr.payload[0] == CtrlHelloAck:
-      helloAcked = true
-      break
-  if not helloAcked:
-    if debug != nil: debug("HELLO not acknowledged, aborting")
-    return
+  # NOTE: no HELLO handshake here. `findVandalShell` already probed the
+  # link with a HELLO/HELLO_ACK exchange to disambiguate the Vandal
+  # agent from the other vendor-page HID devices on the host, so by
+  # the time we enter the pump the agent has already received exactly
+  # one HELLO and replied. Re-sending it would trigger a second
+  # `payload connected` notification in the web UI for no benefit.
 
   if debug != nil: debug("Connected; entering pump loop")
 
@@ -105,6 +87,20 @@ proc runPump*(link: HidLink, child: ShellChild,
           if cmdAcc.len > 0:
             child.writeBytes(cmdAcc)
             stats.bytesIn += uint64(cmdAcc.len)
+            when defined(windows):
+              # cmd.exe driven through a pipe has no line-discipline
+              # echo (a real POSIX TTY would echo via `onlcr`/`echo`).
+              # Without server-side echo the operator types into a
+              # silent web shell. Mirror the input back as OUT bytes,
+              # converting bare CR to CRLF so xterm.js advances the
+              # cursor to the next line the way it would on a TTY.
+              var echoBuf = newSeqOfCap[uint8](cmdAcc.len + 4)
+              for i, b in cmdAcc:
+                echoBuf.add b
+                if b == 0x0D'u8 and
+                   (i + 1 >= cmdAcc.len or cmdAcc[i + 1] != 0x0A'u8):
+                  echoBuf.add 0x0A'u8
+              discard sendOut(link, stats, echoBuf)
             cmdAcc.setLen(0)
       of TypeCtrl:
         case f.payload[0]

