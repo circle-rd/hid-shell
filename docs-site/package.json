@@ -1,0 +1,17 @@
+{
+  "name": "hid-shell-docs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HID-Shell documentation — docs.circle-cyber.com/hid-shell",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview"
+  },
+  "dependencies": {
+    "docus": "latest",
+    "nuxt": "^4.0.0",
+    "better-sqlite3": "^12.2.0"
+  }
+}

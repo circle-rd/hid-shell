@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "HID-Shell Docs (local dev)": {
+      "url": "http://localhost:3000/mcp",
+      "type": "http"
+    },
+    "HID-Shell Docs": {
+      "url": "https://docs.circle-cyber.com/hid-shell/mcp",
+      "type": "http"
+    }
+  }
+}
