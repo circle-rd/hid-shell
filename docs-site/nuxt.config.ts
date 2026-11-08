@@ -1,3 +1,7 @@
+const siteUrl = (process.env.NUXT_SITE_URL ?? "https://docs.circle-cyber.com").replace(/\/$/, "");
+const appBaseUrl = process.env.NUXT_APP_BASE_URL ?? "/hid-shell/";
+const docsUrl = `${siteUrl}${appBaseUrl.startsWith("/") ? appBaseUrl : `/${appBaseUrl}`}`.replace(/\/$/, "");
+
 export default defineNuxtConfig({
   extends: ["docus"],
   css: ["~/circle-theme.css"],
@@ -12,11 +16,11 @@ export default defineNuxtConfig({
   },
 
   app: {
-    baseURL: process.env.NUXT_APP_BASE_URL ?? "/hid-shell/",
+    baseURL: appBaseUrl,
   },
 
   site: {
-    url: process.env.NUXT_SITE_URL ?? "https://docs.circle-cyber.com/hid-shell",
+    url: siteUrl,
   },
 
   // Subpath baseURL sites need this disabled to avoid @nuxt/robots errors.
@@ -25,6 +29,7 @@ export default defineNuxtConfig({
   },
 
   llms: {
+    domain: docsUrl,
     title: "HID-Shell",
     description:
       "Headless cross-platform raw-HID shell payload for the Vandal ESP32 agent.",
