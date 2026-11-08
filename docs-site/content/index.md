@@ -3,7 +3,7 @@ title: HID-Shell
 description: Headless cross-platform raw-HID shell payload for the Vandal ESP32 agent.
 ---
 
-:::u-page-hero
+:::u-page-hero{.circle-hero}
 #title
 HID-Shell
 
@@ -20,7 +20,7 @@ GitHub
 ::::
 :::
 
-:::u-page-section
+:::u-page-section{.circle-section}
 #title
 Core concepts
 
@@ -38,7 +38,7 @@ Everything you need to understand what HID-Shell does and how it moves bytes.
 ::::
 :::
 
-:::u-page-section
+:::u-page-section{.circle-section}
 #title
 Reference
 
